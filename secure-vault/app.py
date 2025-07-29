@@ -1,106 +1,72 @@
-from flask import Flask, render_template, request, redirect, url_for, session, send_from_directory
+from flask import Flask, render_template, request, redirect, session, send_from_directory
+import os
+import logging
 from werkzeug.utils import secure_filename
-import os, base64, hashlib, pymongo, yara
-from Crypto.Cipher import AES, DES3, DES, Blowfish
-from Crypto.Random import get_random_bytes
-from Crypto.Util.Padding import pad, unpad
-from logger import get_logger
+from encryption_utils import aes_encrypt, aes_decrypt, des_encrypt, des_decrypt, tdes_encrypt, tdes_decrypt, fernet_encrypt, fernet_decrypt, base64_encode, base64_decode, blowfish_encrypt, blowfish_decrypt, rc4_encrypt, rc4_decrypt
 from malware_analysis import analyze_with_virustotal
+from pymongo import MongoClient
+from datetime import datetime
 
 app = Flask(__name__)
-app.secret_key = 'supersecretkey'
-UPLOAD_FOLDER = 'uploads'
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+app.secret_key = 'secretkey'
+app.config['UPLOAD_FOLDER'] = 'uploads'
 
-# Database
-client = pymongo.MongoClient('mongodb://localhost:27017/')
-db = client['secure_vault']
+# Set up logging
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+handler = logging.FileHandler('vault_activity_log.txt')
+formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+handler.setFormatter(formatter)
+logger.addHandler(handler)
+
+# MongoDB setup
+client = MongoClient('mongodb://localhost:27017/')
+db = client['vault_db']
 users = db['users']
+logs = db['logs']
 
-# Logger
-logger = get_logger()
-
-# --- ENCRYPTION FUNCTIONS ---
-def encrypt_data(data, key, method):
-    key_bytes = hashlib.sha256(key.encode()).digest()
-    if method == 'AES':
-        cipher = AES.new(key_bytes[:16], AES.MODE_CBC)
-        ct = cipher.encrypt(pad(data, AES.block_size))
-        return cipher.iv + ct
-    elif method == 'DES':
-        cipher = DES.new(key_bytes[:8], DES.MODE_CBC)
-        return cipher.iv + cipher.encrypt(pad(data, DES.block_size))
-    elif method == '3DES':
-        cipher = DES3.new(key_bytes[:24], DES3.MODE_CBC)
-        return cipher.iv + cipher.encrypt(pad(data, DES3.block_size))
-    elif method == 'Blowfish':
-        cipher = Blowfish.new(key_bytes[:16], Blowfish.MODE_CBC)
-        return cipher.iv + cipher.encrypt(pad(data, Blowfish.block_size))
-    elif method in ['RC4', 'Base64']:
-        return base64.b64encode(data)
-    return data
-
-def decrypt_data(data, key, method):
-    key_bytes = hashlib.sha256(key.encode()).digest()
-    try:
-        if method == 'AES':
-            iv, ct = data[:16], data[16:]
-            cipher = AES.new(key_bytes[:16], AES.MODE_CBC, iv)
-            return unpad(cipher.decrypt(ct), AES.block_size)
-        elif method == 'DES':
-            iv, ct = data[:8], data[8:]
-            cipher = DES.new(key_bytes[:8], DES.MODE_CBC, iv)
-            return unpad(cipher.decrypt(ct), DES.block_size)
-        elif method == '3DES':
-            iv, ct = data[:8], data[8:]
-            cipher = DES3.new(key_bytes[:24], DES3.MODE_CBC, iv)
-            return unpad(cipher.decrypt(ct), DES3.block_size)
-        elif method == 'Blowfish':
-            iv, ct = data[:8], data[8:]
-            cipher = Blowfish.new(key_bytes[:16], Blowfish.MODE_CBC, iv)
-            return unpad(cipher.decrypt(ct), Blowfish.block_size)
-        elif method in ['RC4', 'Base64']:
-            return base64.b64decode(data)
-    except:
-        return b''
-
-# --- MALWARE ANALYSIS (Deprecated) ---
-def analyze_file_with_yara(filepath):
-    rules_path = "malware_rules.yar"
-    if not os.path.exists(rules_path):
-        with open(rules_path, "w") as f:
-            f.write('rule dummy_malware { condition: false }')
-    rules = yara.compile(filepath=rules_path)
-    matches = rules.match(filepath)
-    return bool(matches)
-
-# --- ROUTES ---
 @app.route('/')
-def index():
+def home():
     return redirect('/login')
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
-        uname = request.form['username']
-        pwd = hashlib.sha256(request.form['password'].encode()).hexdigest()
-        user = users.find_one({'username': uname, 'password': pwd})
-        logger.info(f"User: {uname} | Action: Login | Status: {'Success' if user else 'Fail'}")
+        username = request.form['username']
+        password = request.form['password']
+        user = users.find_one({'username': username, 'password': password})
         if user:
-            session['username'] = uname
+            session['username'] = username
+            logger.info(f"User: {username} logged in")
+            logs.insert_one({'username': username, 'action': 'login', 'timestamp': datetime.now()})
             return redirect('/menu')
+        else:
+            return 'Invalid credentials'
     return render_template('login.html')
 
 @app.route('/register', methods=['GET', 'POST'])
 def register():
     if request.method == 'POST':
-        uname = request.form['username']
-        pwd = hashlib.sha256(request.form['password'].encode()).hexdigest()
-        users.insert_one({'username': uname, 'password': pwd})
-        logger.info(f"User: {uname} | Action: Register")
+        username = request.form['username']
+        password = request.form['password']
+        if users.find_one({'username': username}):
+            return 'User already exists'
+        users.insert_one({'username': username, 'password': password})
         return redirect('/login')
     return render_template('register.html')
+
+@app.route('/logout')
+def logout():
+    username = session.get('username')
+    if username:
+        logger.info(f"User: {username} logged out")
+        logs.insert_one({'username': username, 'action': 'logout', 'timestamp': datetime.now()})
+    session.pop('username', None)
+    return redirect('/login')
+
+@app.route('/uploads/<path:filename>')
+def download_file(filename):
+    return send_from_directory(app.config['UPLOAD_FOLDER'], filename, as_attachment=True)
 
 @app.route('/menu', methods=['GET', 'POST'])
 def menu():
@@ -108,53 +74,97 @@ def menu():
         return redirect('/login')
 
     files = os.listdir(app.config['UPLOAD_FOLDER'])
+    step = request.form.get('step') or 'choose_action'
+    selected_action = request.form.get('action')
 
     if request.method == 'POST':
-        action = request.form['action']
+        if step == 'choose_action':
+            return render_template('vault.html', files=files, step=selected_action)
+
         uploaded_file = request.files.get('file')
+        filename = secure_filename(uploaded_file.filename) if uploaded_file else None
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename) if filename else None
         method = request.form.get('encryption')
         key = request.form.get('key') or 'defaultkey'
 
-        filename = secure_filename(uploaded_file.filename)
-        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-
-        if action == 'upload':
+        if selected_action == 'upload' and uploaded_file:
             uploaded_file.save(filepath)
             logger.info(f"User: {session['username']} | Action: Upload | File: {filename}")
+            logs.insert_one({'username': session['username'], 'action': 'upload', 'file': filename, 'timestamp': datetime.now()})
 
-        elif action == 'encrypt':
+        elif selected_action == 'encrypt' and uploaded_file:
             data = uploaded_file.read()
             encrypted = encrypt_data(data, key, method)
             with open(filepath, 'wb') as f:
                 f.write(encrypted)
             logger.info(f"User: {session['username']} | Action: Encrypt | File: {filename} | Method: {method}")
+            logs.insert_one({'username': session['username'], 'action': 'encrypt', 'file': filename, 'method': method, 'timestamp': datetime.now()})
 
-        elif action == 'decrypt':
+        elif selected_action == 'decrypt' and uploaded_file:
+            uploaded_file.save(filepath)
             with open(filepath, 'rb') as f:
                 enc = f.read()
             dec = decrypt_data(enc, key, method)
             with open(filepath.replace('.', '_decrypted.'), 'wb') as f:
                 f.write(dec)
             logger.info(f"User: {session['username']} | Action: Decrypt | File: {filename} | Method: {method}")
+            logs.insert_one({'username': session['username'], 'action': 'decrypt', 'file': filename, 'method': method, 'timestamp': datetime.now()})
 
-        elif action == 'analyze':
+        elif selected_action == 'analyze' and uploaded_file:
             uploaded_file.save(filepath)
             result = analyze_with_virustotal(filepath, session['username'])
             logger.info(f"User: {session['username']} | Action: Malware Analysis | File: {filename} | Result: {result}")
+            logs.insert_one({'username': session['username'], 'action': 'analyze', 'file': filename, 'result': result, 'timestamp': datetime.now()})
+
+        elif selected_action == 'open_case':
+            logger.info(f"User: {session['username']} | Action: Open Case")
+            logs.insert_one({'username': session['username'], 'action': 'open_case', 'timestamp': datetime.now()})
+
+        elif selected_action == 'view_logs':
+            user_logs = list(logs.find({'username': session['username']}))
+            return render_template('vault.html', files=files, step='view_logs', logs=user_logs)
+
+        elif selected_action == 'view_files':
+            return render_template('vault.html', files=files, step='view_files')
 
         return redirect('/menu')
 
-    return render_template('vault.html', files=files)
+    return render_template('vault.html', files=files, step='choose_action')
 
-@app.route('/download/<filename>')
-def download(filename):
-    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+def encrypt_data(data, key, method):
+    if method == 'AES':
+        return aes_encrypt(data, key)
+    elif method == 'DES':
+        return des_encrypt(data, key)
+    elif method == '3DES':
+        return tdes_encrypt(data, key)
+    elif method == 'Fernet':
+        return fernet_encrypt(data, key.encode())
+    elif method == 'Base64':
+        return base64_encode(data)
+    elif method == 'Blowfish':
+        return blowfish_encrypt(data, key)
+    elif method == 'RC4':
+        return rc4_encrypt(data, key)
+    return data
 
-@app.route('/logout')
-def logout():
-    logger.info(f"User: {session.get('username', 'Unknown')} | Action: Logout")
-    session.pop('username', None)
-    return redirect('/login')
+def decrypt_data(data, key, method):
+    if method == 'AES':
+        return aes_decrypt(data, key)
+    elif method == 'DES':
+        return des_decrypt(data, key)
+    elif method == '3DES':
+        return tdes_decrypt(data, key)
+    elif method == 'Fernet':
+        return fernet_decrypt(data, key.encode())
+    elif method == 'Base64':
+        return base64_decode(data)
+    elif method == 'Blowfish':
+        return blowfish_decrypt(data, key)
+    elif method == 'RC4':
+        return rc4_decrypt(data, key)
+    return data
 
 if __name__ == '__main__':
+    os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
     app.run(debug=True)

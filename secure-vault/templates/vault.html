@@ -1,29 +1,122 @@
 {% extends "base.html" %}
 {% block content %}
-<h2>Vault Dashboard</h2>
-<form method="POST" enctype="multipart/form-data">
-    <input type="file" name="file" required><br><br>
-    <select name="encryption">
-        <option value="AES">AES</option>
-        <option value="DES">DES</option>
-        <option value="3DES">3DES</option>
-        <option value="Blowfish">Blowfish</option>
-        <option value="RC4">RC4</option>
-        <option value="Base64">Base64</option>
-    </select><br><br>
-    <input name="key" placeholder="Enter Key (optional)"><br><br>
+<div class="min-h-screen bg-gray-100 px-4 py-10">
+    <div class="max-w-3xl mx-auto">
+        <!-- Menu -->
+        <div class="bg-white p-6 rounded-2xl shadow-md mb-10 text-center">
+            <h2 class="text-2xl font-bold text-gray-800 mb-6">🔐 Evidence Vault System</h2>
+            <form method="POST" enctype="multipart/form-data" class="grid grid-cols-2 gap-4">
+                <input type="hidden" name="step" value="choose_action">
 
-    <button name="action" value="upload">Upload</button>
-    <button name="action" value="encrypt">Encrypt</button>
-    <button name="action" value="decrypt">Decrypt</button>
-    <button name="action" value="analyze">Malware Analysis</button>
-</form>
+                <button type="submit" name="action" value="open_case"
+                    class="bg-blue-500 hover:bg-blue-600 text-white py-2 rounded-md text-sm font-semibold transition">
+                    📂 Open Case
+                </button>
 
-<!-- <h3>Stored Files:</h3>
-<ul>
-{% for file in files %}
-    <li><a href="{{ url_for('download', filename=file) }}">{{ file }}</a></li>
-{% endfor %}
-</ul> -->
-<a href="/logout">Logout</a>
+                <button type="submit" name="action" value="upload"
+                    class="bg-indigo-500 hover:bg-indigo-600 text-white py-2 rounded-md text-sm font-semibold transition">
+                    ⬆️ Upload Evidence File
+                </button>
+
+                <button type="submit" name="action" value="view_files"
+                    class="bg-gray-500 hover:bg-gray-600 text-white py-2 rounded-md text-sm font-semibold transition">
+                    📁 View Evidence Files
+                </button>
+
+                <button type="submit" name="action" value="encrypt"
+                    class="bg-green-500 hover:bg-green-600 text-white py-2 rounded-md text-sm font-semibold transition">
+                    🔐 Encrypt File
+                </button>
+
+                <button type="submit" name="action" value="decrypt"
+                    class="bg-yellow-500 hover:bg-yellow-600 text-white py-2 rounded-md text-sm font-semibold transition">
+                    🔓 Decrypt File
+                </button>
+
+                <button type="submit" name="action" value="analyze"
+                    class="bg-cyan-500 hover:bg-cyan-600 text-white py-2 rounded-md text-sm font-semibold transition">
+                    🧪 Malware Analysis
+                </button>
+
+                <button type="submit" name="action" value="view_logs"
+                    class="bg-purple-500 hover:bg-purple-600 text-white py-2 rounded-md text-sm font-semibold transition col-span-2">
+                    📜 View Vault Logs
+                </button>
+            </form>
+
+            <div class="mt-6">
+                <a href="/logout"
+                    class="inline-block bg-red-500 hover:bg-red-600 text-white px-6 py-2 rounded-md text-sm font-medium transition">
+                    🚪 Logout
+                </a>
+            </div>
+        </div>
+
+        <!-- Dynamic Action Form -->
+        {% if step in ['encrypt', 'decrypt', 'upload', 'analyze'] %}
+        <div class="bg-white p-6 rounded-2xl shadow-md">
+            <form method="POST" enctype="multipart/form-data" class="space-y-4">
+                <input type="hidden" name="action" value="{{ step }}">
+
+                <label class="block text-sm font-medium text-gray-700">Choose File:</label>
+                <input type="file" name="file" required class="w-full border border-gray-300 p-2 rounded-md">
+
+                {% if step != 'upload' %}
+                <div>
+                    <label class="block text-sm font-medium text-gray-700">Encryption Key:</label>
+                    <input type="text" name="key" required class="w-full border border-gray-300 p-2 rounded-md"
+                        placeholder="Enter key">
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700">Encryption Method:</label>
+                    <select name="encryption" required class="w-full border border-gray-300 p-2 rounded-md">
+                        <option value="AES">AES</option>
+                        <option value="DES">DES</option>
+                        <option value="3DES">3DES</option>
+                        <option value="Fernet">Fernet</option>
+                        <option value="Base64">Base64</option>
+                        <option value="Blowfish">Blowfish</option>
+                        <option value="RC4">RC4</option>
+                    </select>
+                </div>
+                {% endif %}
+
+                <button type="submit"
+                    class="bg-blue-600 hover:bg-blue-700 text-white py-2 px-6 rounded-md text-sm font-semibold transition">
+                    🚀 {{ step|capitalize }} Now
+                </button>
+            </form>
+        </div>
+        {% endif %}
+
+        <!-- View Files -->
+        {% if step == 'view_files' %}
+        <div class="bg-white p-6 rounded-2xl shadow-md mt-6">
+            <h3 class="text-lg font-bold mb-2">📁 Evidence Files</h3>
+            <ul class="space-y-1 text-blue-600 text-sm underline">
+                {% for file in files %}
+                <li><a href="/uploads/{{ file }}" target="_blank">{{ file }}</a></li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+
+        <!-- View Logs -->
+        {% if step == 'view_logs' %}
+        <div class="bg-white p-6 rounded-2xl shadow-md mt-6">
+            <h3 class="text-lg font-bold mb-4">📜 Vault Activity Logs</h3>
+            <ul class="text-gray-800 text-sm space-y-1 max-h-[250px] overflow-y-auto">
+                {% for log in logs %}
+                <li>
+                    {{ log.timestamp.strftime('%Y-%m-%d %H:%M:%S') if log.timestamp else '' }} —
+                    {{ log.action|capitalize }}
+                    {% if log.file %} — {{ log.file }} {% endif %}
+                </li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+    </div>
+</div>
 {% endblock %}
